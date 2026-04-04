@@ -3,7 +3,7 @@ langchain==0.1.20
 langchain-community==0.0.38
 langchain-text-splitters==0.0.1
 sentence-transformers==2.7.0
-faiss-cpu==1.9.0.post1
+faiss-cpu==1.13.0
 transformers==4.40.0
 torch==2.3.0
 
@@ -14,7 +14,7 @@ pdfplumber==0.11.0
 # Voice Processing
 SpeechRecognition==3.10.1
 gTTS==2.5.1
-pyaudio==0.2.14
+# pyaudio is NOT available on Streamlit Cloud — microphone input disabled on cloud
 
 # Language Detection & Translation
 langdetect==1.0.9
@@ -30,5 +30,5 @@ streamlit==1.35.0
 numpy==1.26.4
 Pillow==10.3.0
 
-# Claude AI Chatbot (new)
+# Claude AI Chatbot
 requests==2.31.0
