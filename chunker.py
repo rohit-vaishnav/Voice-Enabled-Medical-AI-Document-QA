@@ -1,17 +1,12 @@
 """
 chunker.py
-Split cleaned text into overlapping chunks for embedding.
+Split cleaned text into overlapping chunks — pure Python, no LangChain needed.
 """
 
-try:
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-except ImportError:
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-
-def chunk_text(text: str, chunk_size: int = 250, chunk_overlap: int = 100) -> list[str]:
+def chunk_text(text: str, chunk_size: int = 400, chunk_overlap: int = 50) -> list:
     """
-    Split text into chunks with overlap to preserve context across boundaries.
+    Split text into overlapping chunks without any external dependencies.
 
     Args:
         text: Cleaned document text.
@@ -21,12 +16,29 @@ def chunk_text(text: str, chunk_size: int = 250, chunk_overlap: int = 100) -> li
     Returns:
         List of text chunks.
     """
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", ". ", " ", ""]
-    )
-    chunks = splitter.split_text(text)
-    # Remove empty/tiny chunks
-    chunks = [c.strip() for c in chunks if len(c.strip()) > 30]
+    chunks = []
+    start  = 0
+    length = len(text)
+
+    while start < length:
+        end = start + chunk_size
+
+        # Try to break at a natural boundary (sentence or word)
+        if end < length:
+            # Prefer breaking at ". " or "\n"
+            for sep in ['. ', '\n', ' ']:
+                pos = text.rfind(sep, start, end)
+                if pos != -1 and pos > start:
+                    end = pos + len(sep)
+                    break
+
+        chunk = text[start:end].strip()
+        if len(chunk) > 30:
+            chunks.append(chunk)
+
+        # Move forward with overlap
+        start = end - chunk_overlap
+        if start <= 0 or start >= length:
+            break
+
     return chunks
