@@ -363,13 +363,17 @@ if st.session_state.doc_processed:
     # Determine query
     query = None
     if voice_btn:
-        with st.spinner("🎤 Listening..."):
-            spoken = speech_to_text()
-            if spoken:
-                query = spoken
-                st.info(f"🎤 You said: **{spoken}**")
-            else:
-                st.warning("Could not detect speech. Please try again or type your question.")
+        from voice_handler import SR_AVAILABLE, PYAUDIO_AVAILABLE
+        if not SR_AVAILABLE or not PYAUDIO_AVAILABLE:
+            st.warning("🎤 Voice input is not available on Streamlit Cloud (no microphone access). Please type your question.")
+        else:
+            with st.spinner("🎤 Listening..."):
+                spoken = speech_to_text()
+                if spoken:
+                    query = spoken
+                    st.info(f"🎤 You said: **{spoken}**")
+                else:
+                    st.warning("Could not detect speech. Please try again or type your question.")
 
     if send_btn and user_text.strip():
         query = user_text.strip()
