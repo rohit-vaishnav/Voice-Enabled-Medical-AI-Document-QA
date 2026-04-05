@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import tempfile
+import base64
 
 from document_processor import extract_text_from_pdf, preprocess_text
 from chunker import chunk_text
@@ -13,261 +14,393 @@ from medical_logic import check_medical_values
 from chat_history import ChatHistory
 from qr_generator import generate_qr_code
 
-# ─────────────────────────────────────────────
-# Page config
-# ─────────────────────────────────────────────
-st.set_page_config(
-    page_title="🏥 Medical QA System",
-    page_icon="🏥",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ── Hardcoded config ──────────────────────────────────────────────────────────
+DEPLOY_URL  = "https://voice-enabled-medical-ai-document-app.streamlit.app/"
+ANTHROPIC_API_KEY = "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"   # ← paste your key once here
+os.environ["ANTHROPIC_API_KEY"] = ANTHROPIC_API_KEY
 
 # ─────────────────────────────────────────────
-# Session state
-# ─────────────────────────────────────────────
-defaults = {
-    "chat_history":   ChatHistory(),
-    "faiss_index":    None,
-    "chunks":         [],
-    "doc_processed":  False,
-    "audio_files":    [],      # list of tts file paths, one per turn
-    "last_query":     "",      # prevent re-processing same query on rerun
-}
-for k, v in defaults.items():
+st.set_page_config(
+    page_title="🏥 Medical AI",
+    page_icon="🏥",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# ── Session state ─────────────────────────────────────────────────────────────
+for k, v in {
+    "chat_history":  ChatHistory(),
+    "faiss_index":   None,
+    "chunks":        [],
+    "doc_processed": False,
+    "audio_files":   [],
+    "last_query":    "",
+    "last_alerts":   [],
+}.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ─────────────────────────────────────────────
-# CSS
-# ─────────────────────────────────────────────
-st.markdown("""
+# ── QR code (generated once, cached) ─────────────────────────────────────────
+@st.cache_data
+def get_qr_b64():
+    path = generate_qr_code(DEPLOY_URL)
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+qr_b64 = get_qr_b64()
+
+# ── CSS ───────────────────────────────────────────────────────────────────────
+st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500;600&display=swap');
 
-.hero-header {
-    background: linear-gradient(135deg,#0a1628 0%,#0d2b4e 40%,#0a3d62 70%,#1a6b8a 100%);
-    padding: 32px 28px; border-radius: 20px; text-align: center;
-    margin-bottom: 24px; position: relative; overflow: hidden;
-    box-shadow: 0 16px 48px rgba(0,100,200,0.3);
-}
-.hero-header h1 { font-size:2rem; font-weight:700; color:#fff !important; margin:0 0 6px; }
-.hero-header h1 span { color:#22d3ee; }
-.hero-header p { color:#94a3b8; font-size:0.92rem; margin:0 0 16px; }
-.hero-badges { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
-.hero-badge {
-    background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15);
-    color:#7dd3fc; padding:5px 14px; border-radius:20px; font-size:0.75rem; font-weight:500;
-}
+/* ── Global reset & space background ── */
+html, body, [data-testid="stAppViewContainer"] {{
+    font-family: 'Inter', sans-serif;
+    background: #000510 !important;
+}}
+[data-testid="stAppViewContainer"] {{
+    background:
+        radial-gradient(ellipse at 20% 20%, rgba(0,80,180,0.18) 0%, transparent 55%),
+        radial-gradient(ellipse at 80% 10%, rgba(100,0,200,0.13) 0%, transparent 50%),
+        radial-gradient(ellipse at 60% 80%, rgba(0,150,200,0.10) 0%, transparent 50%),
+        radial-gradient(ellipse at 10% 80%, rgba(180,0,120,0.08) 0%, transparent 40%),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='800' height='800'%3E%3Crect fill='%23000510' width='800' height='800'/%3E%3Ccircle fill='white' cx='120' cy='60' r='1.2' opacity='.8'/%3E%3Ccircle fill='white' cx='340' cy='120' r='0.8' opacity='.6'/%3E%3Ccircle fill='white' cx='560' cy='40' r='1.5' opacity='.9'/%3E%3Ccircle fill='white' cx='700' cy='200' r='0.9' opacity='.5'/%3E%3Ccircle fill='white' cx='80' cy='300' r='1.1' opacity='.7'/%3E%3Ccircle fill='white' cx='240' cy='400' r='0.7' opacity='.4'/%3E%3Ccircle fill='white' cx='460' cy='350' r='1.3' opacity='.8'/%3E%3Ccircle fill='white' cx='620' cy='500' r='0.6' opacity='.5'/%3E%3Ccircle fill='white' cx='760' cy='420' r='1.0' opacity='.7'/%3E%3Ccircle fill='white' cx='150' cy='600' r='0.8' opacity='.6'/%3E%3Ccircle fill='white' cx='380' cy='680' r='1.2' opacity='.8'/%3E%3Ccircle fill='white' cx='540' cy='720' r='0.9' opacity='.5'/%3E%3Ccircle fill='white' cx='50' cy='750' r='1.1' opacity='.6'/%3E%3Ccircle fill='white' cx='680' cy='760' r='0.7' opacity='.4'/%3E%3Ccircle fill='%2388ccff' cx='200' cy='180' r='1.4' opacity='.6'/%3E%3Ccircle fill='%23cc88ff' cx='600' cy='300' r='1.0' opacity='.5'/%3E%3Ccircle fill='%2388ccff' cx='420' cy='560' r='1.2' opacity='.6'/%3E%3C/svg%3E") !important;
+    background-size: cover, cover, cover, cover, 800px 800px !important;
+}}
+[data-testid="stHeader"] {{ background: transparent !important; }}
+[data-testid="stSidebar"] {{ background: rgba(0,5,20,0.95) !important; border-right: 1px solid rgba(0,150,255,0.15) !important; }}
+.block-container {{ padding: 2rem 3rem 3rem !important; max-width: 1400px; }}
+section[data-testid="stSidebar"] .block-container {{ padding: 1.5rem 1rem !important; }}
 
-.feat-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:24px; }
-.feat-card { border-radius:14px; padding:18px 14px; color:white; transition:transform .2s; }
-.feat-card:hover { transform:translateY(-4px); }
-.feat-card.blue   { background:linear-gradient(135deg,#0d2b4e,#1e40af); border:1px solid #3b82f6; box-shadow:0 6px 24px rgba(59,130,246,.25); }
-.feat-card.teal   { background:linear-gradient(135deg,#042f2e,#0f6e56); border:1px solid #14b8a6; box-shadow:0 6px 24px rgba(20,184,166,.25); }
-.feat-card.purple { background:linear-gradient(135deg,#1e1b4b,#4c1d95); border:1px solid #8b5cf6; box-shadow:0 6px 24px rgba(139,92,246,.25); }
-.feat-card.rose   { background:linear-gradient(135deg,#4c0519,#9f1239); border:1px solid #f43f5e; box-shadow:0 6px 24px rgba(244,63,94,.25); }
-.feat-card .ficon  { font-size:1.7rem; margin-bottom:8px; display:block; }
-.feat-card .ftitle { font-size:0.9rem; font-weight:700; margin-bottom:3px; }
-.feat-card .fdesc  { font-size:0.75rem; color:rgba(255,255,255,.65); line-height:1.5; }
+/* ── Hero ── */
+.hero {{
+    text-align: center;
+    padding: 60px 20px 40px;
+    position: relative;
+}}
+.hero-glow {{
+    position: absolute;
+    top: 0; left: 50%;
+    transform: translateX(-50%);
+    width: 600px; height: 300px;
+    background: radial-gradient(ellipse, rgba(0,120,255,0.15) 0%, transparent 70%);
+    pointer-events: none;
+}}
+.hero-eyebrow {{
+    display: inline-block;
+    font-family: 'Orbitron', monospace;
+    font-size: 0.7rem; font-weight: 700;
+    letter-spacing: 0.25em; color: #22d3ee;
+    background: rgba(34,211,238,0.08);
+    border: 1px solid rgba(34,211,238,0.25);
+    padding: 5px 18px; border-radius: 20px;
+    margin-bottom: 20px;
+    text-transform: uppercase;
+}}
+.hero-title {{
+    font-family: 'Orbitron', monospace;
+    font-size: clamp(2rem, 5vw, 3.8rem);
+    font-weight: 900;
+    line-height: 1.1;
+    color: #ffffff;
+    margin: 0 0 16px;
+    text-shadow: 0 0 40px rgba(0,150,255,0.4);
+}}
+.hero-title span {{ color: #22d3ee; }}
+.hero-subtitle {{
+    font-size: 1rem; color: #94a3b8;
+    max-width: 580px; margin: 0 auto 32px;
+    line-height: 1.7;
+}}
+.hero-badges {{
+    display: flex; gap: 10px;
+    justify-content: center; flex-wrap: wrap;
+    margin-bottom: 10px;
+}}
+.hbadge {{
+    font-size: 0.72rem; font-weight: 500;
+    padding: 5px 14px; border-radius: 20px;
+    border: 1px solid; letter-spacing: 0.03em;
+}}
+.hbadge.blue  {{ color:#7dd3fc; border-color:rgba(125,211,252,.3); background:rgba(125,211,252,.06); }}
+.hbadge.teal  {{ color:#5eead4; border-color:rgba(94,234,212,.3);  background:rgba(94,234,212,.06); }}
+.hbadge.purple{{ color:#c4b5fd; border-color:rgba(196,181,253,.3); background:rgba(196,181,253,.06); }}
+.hbadge.pink  {{ color:#f9a8d4; border-color:rgba(249,168,212,.3); background:rgba(249,168,212,.06); }}
+.hbadge.amber {{ color:#fcd34d; border-color:rgba(252,211,77,.3);  background:rgba(252,211,77,.06); }}
 
-.section-heading {
-    font-size:0.95rem; font-weight:700; color:#1e40af;
-    margin:18px 0 10px; padding-left:10px;
-    border-left:4px solid #3b82f6; border-radius:0 4px 4px 0;
-}
+/* ── Glass card ── */
+.glass {{
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}}
+.glass-blue {{
+    background: rgba(0,80,200,0.07);
+    border: 1px solid rgba(0,150,255,0.15);
+    border-radius: 20px;
+}}
 
-/* ── Chat area ── */
-.chat-area {
-    background:#0f172a; border-radius:16px;
-    padding:18px; border:1px solid #1e3a5f;
-    margin-bottom:16px;
-}
+/* ── Stat cards ── */
+.stat-row {{
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px; margin-bottom: 28px;
+}}
+.stat-card {{
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 16px; padding: 20px 16px;
+    text-align: center;
+    transition: border-color .3s, transform .2s;
+    position: relative; overflow: hidden;
+}}
+.stat-card::before {{
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 2px;
+}}
+.stat-card.sc-blue::before  {{ background: linear-gradient(90deg,transparent,#3b82f6,transparent); }}
+.stat-card.sc-teal::before  {{ background: linear-gradient(90deg,transparent,#14b8a6,transparent); }}
+.stat-card.sc-purple::before{{ background: linear-gradient(90deg,transparent,#8b5cf6,transparent); }}
+.stat-card.sc-pink::before  {{ background: linear-gradient(90deg,transparent,#ec4899,transparent); }}
+.stat-card:hover {{ border-color:rgba(255,255,255,0.15); transform:translateY(-3px); }}
+.stat-icon {{ font-size: 1.8rem; margin-bottom: 8px; }}
+.stat-num  {{ font-family:'Orbitron',monospace; font-size:1.6rem; font-weight:700; color:#fff; margin-bottom:4px; }}
+.stat-lbl  {{ font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:.08em; }}
 
-/* User bubble */
-.bubble-user { display:flex; justify-content:flex-end; margin-bottom:12px; }
-.bubble-user-inner {
-    background:linear-gradient(135deg,#1d4ed8,#7c3aed); color:#fff !important;
-    border-radius:18px 18px 4px 18px; padding:11px 16px; max-width:72%;
-    font-size:0.88rem; line-height:1.6; box-shadow:0 3px 12px rgba(99,102,241,.3);
-}
-.bubble-user-label { font-size:0.7rem; color:rgba(255,255,255,.65) !important; font-weight:600; margin-bottom:3px; text-align:right; }
+/* ── Section title ── */
+.sec-title {{
+    font-family: 'Orbitron', monospace;
+    font-size: 0.75rem; font-weight: 700;
+    color: #22d3ee; letter-spacing: .2em;
+    text-transform: uppercase;
+    margin: 28px 0 14px;
+    display: flex; align-items: center; gap: 10px;
+}}
+.sec-title::after {{
+    content: '';
+    flex: 1; height: 1px;
+    background: linear-gradient(90deg, rgba(34,211,238,.3), transparent);
+}}
 
-/* Bot bubble */
-.bubble-bot { display:flex; justify-content:flex-start; margin-bottom:4px; }
-.bubble-bot-inner {
-    background:#1e293b; border:1px solid #334155; border-top:3px solid #22d3ee;
-    color:#e2e8f0 !important; border-radius:4px 18px 18px 18px;
-    padding:13px 16px; max-width:84%; font-size:0.85rem; line-height:1.7;
-    box-shadow:0 3px 12px rgba(0,0,0,.3);
-}
-.bubble-bot-label { font-size:0.7rem; color:#22d3ee !important; font-weight:700; margin-bottom:5px; letter-spacing:.04em; }
-.source-pdf {
-    display:inline-block; background:rgba(34,211,238,.15); border:1px solid rgba(34,211,238,.4);
-    color:#22d3ee; font-size:0.68rem; padding:1px 7px; border-radius:10px; margin:0 3px 5px 0; font-weight:600;
-}
-.source-ai {
-    display:inline-block; background:rgba(139,92,246,.15); border:1px solid rgba(139,92,246,.4);
-    color:#a78bfa; font-size:0.68rem; padding:1px 7px; border-radius:10px; margin:0 3px 5px 0; font-weight:600;
-}
+/* ── Upload zone ── */
+.upload-zone {{
+    border: 1.5px dashed rgba(34,211,238,0.35);
+    border-radius: 16px;
+    padding: 28px 20px;
+    text-align: center;
+    background: rgba(34,211,238,0.03);
+    margin-bottom: 20px;
+}}
+.upload-zone p {{ color:#475569; font-size:.85rem; margin-top:6px; }}
 
-/* Audio row under bot bubble */
-.audio-row { margin:0 0 16px 0; padding-left:4px; }
+/* ── Chat ── */
+.chat-area {{
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 20px; padding: 20px;
+    margin-bottom: 16px;
+    backdrop-filter: blur(8px);
+}}
 
-/* Alert box */
-.alert-box {
-    background:linear-gradient(135deg,#431407,#78350f); color:#fed7aa !important;
-    border-left:4px solid #f97316; padding:10px 14px; border-radius:8px;
-    margin:5px 0; font-size:0.85rem;
-}
+.bubble-user {{ display:flex; justify-content:flex-end; margin-bottom:14px; }}
+.bubble-user-inner {{
+    background: linear-gradient(135deg,rgba(29,78,216,.7),rgba(124,58,237,.7));
+    border: 1px solid rgba(139,92,246,.3);
+    color: #fff !important;
+    border-radius: 18px 18px 4px 18px;
+    padding: 12px 18px; max-width: 72%;
+    font-size: .88rem; line-height: 1.6;
+    backdrop-filter: blur(8px);
+}}
+.bubble-user-label {{ font-size:.68rem; color:rgba(255,255,255,.55)!important; font-weight:600; margin-bottom:3px; text-align:right; font-family:'Orbitron',monospace; letter-spacing:.05em; }}
 
-/* Success box */
-.success-box {
-    background:linear-gradient(135deg,#14532d,#166534); color:#bbf7d0 !important;
-    border-left:4px solid #22c55e; padding:10px 14px; border-radius:8px; font-size:0.85rem;
-}
+.bubble-bot {{ display:flex; justify-content:flex-start; margin-bottom:4px; }}
+.bubble-bot-inner {{
+    background: rgba(15,23,42,0.8);
+    border: 1px solid rgba(34,211,238,0.2);
+    border-top: 2px solid #22d3ee;
+    color: #e2e8f0 !important;
+    border-radius: 4px 18px 18px 18px;
+    padding: 14px 18px; max-width: 84%;
+    font-size: .85rem; line-height: 1.7;
+    backdrop-filter: blur(8px);
+}}
+.bubble-bot-label {{ font-size:.68rem; color:#22d3ee!important; font-weight:700; margin-bottom:5px; letter-spacing:.1em; font-family:'Orbitron',monospace; }}
+.src-pdf {{ display:inline-block; background:rgba(34,211,238,.1); border:1px solid rgba(34,211,238,.3); color:#22d3ee; font-size:.65rem; padding:1px 7px; border-radius:8px; margin:0 3px 5px 0; font-weight:600; }}
+.src-ai  {{ display:inline-block; background:rgba(139,92,246,.1); border:1px solid rgba(139,92,246,.3); color:#a78bfa; font-size:.65rem; padding:1px 7px; border-radius:8px; margin:0 3px 5px 0; font-weight:600; }}
 
-/* Upload zone */
-.upload-zone {
-    background:linear-gradient(135deg,#0d2b4e,#1e3a5f);
-    border:2px dashed #3b82f6; border-radius:14px;
-    padding:24px; text-align:center; margin-bottom:18px;
-}
-.upload-zone p { color:#94a3b8; font-size:0.85rem; margin-top:6px; }
+/* ── Input section ── */
+.input-dock {{
+    background: rgba(0,5,20,0.7);
+    border: 1px solid rgba(34,211,238,0.2);
+    border-radius: 16px; padding: 16px 18px;
+    backdrop-filter: blur(12px);
+}}
 
-/* Input row at bottom */
-.input-section {
-    background:#0d2b4e; border:1px solid #1e40af;
-    border-radius:14px; padding:14px 16px; margin-top:8px;
-}
+/* ── Alert ── */
+.alert-box {{
+    background: rgba(251,146,60,.08);
+    border: 1px solid rgba(251,146,60,.3);
+    border-left: 3px solid #f97316;
+    color: #fed7aa !important;
+    padding: 10px 14px; border-radius: 10px;
+    margin: 5px 0; font-size:.85rem;
+}}
 
-/* Sidebar */
-.sidebar-card {
-    background:linear-gradient(135deg,#0d2b4e,#0f172a);
-    border:1px solid #1e40af; border-radius:12px;
-    padding:12px; margin-bottom:12px; color:#e2e8f0;
-}
+/* ── Success ── */
+.success-box {{
+    background: rgba(34,197,94,.08);
+    border: 1px solid rgba(34,197,94,.3);
+    border-left: 3px solid #22c55e;
+    color: #bbf7d0 !important;
+    padding: 10px 14px; border-radius: 10px; font-size:.85rem;
+}}
 
-/* Streamlit overrides */
-.stTextInput > div > div > input {
-    background:#0f172a !important; border:1.5px solid #1e3a5f !important;
-    color:#e2e8f0 !important; border-radius:10px !important; font-size:0.88rem !important;
-}
-.stTextInput > div > div > input:focus { border-color:#3b82f6 !important; }
-.stButton > button {
-    background:linear-gradient(135deg,#1e40af,#7c3aed) !important;
-    color:white !important; border:none !important; border-radius:10px !important;
-    font-weight:600 !important;
-}
+/* ── QR ── */
+.qr-wrap {{
+    text-align: center;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px; padding: 20px 14px;
+}}
+.qr-wrap img {{ border-radius: 10px; }}
+.qr-label {{ font-size:.72rem; color:#64748b; margin-top:8px; font-family:'Orbitron',monospace; letter-spacing:.08em; }}
+
+/* ── Streamlit widget overrides ── */
+.stTextInput > div > div > input {{
+    background: rgba(0,5,20,0.6) !important;
+    border: 1.5px solid rgba(34,211,238,0.25) !important;
+    color: #e2e8f0 !important;
+    border-radius: 10px !important;
+    font-size: .88rem !important;
+}}
+.stTextInput > div > div > input:focus {{
+    border-color: rgba(34,211,238,0.6) !important;
+    box-shadow: 0 0 0 3px rgba(34,211,238,0.1) !important;
+}}
+.stTextInput > div > div > input::placeholder {{ color:#334155 !important; }}
+.stButton > button {{
+    background: linear-gradient(135deg,rgba(29,78,216,.8),rgba(124,58,237,.8)) !important;
+    color: white !important; border: 1px solid rgba(139,92,246,.4) !important;
+    border-radius: 10px !important; font-weight: 600 !important;
+    font-family: 'Inter', sans-serif !important;
+    transition: all .2s !important;
+}}
+.stButton > button:hover {{
+    background: linear-gradient(135deg,rgba(29,78,216,1),rgba(124,58,237,1)) !important;
+    box-shadow: 0 0 20px rgba(139,92,246,.4) !important;
+}}
+div[data-testid="stFileUploader"] {{
+    background: transparent !important;
+}}
+.stSelectbox > div > div {{
+    background: rgba(0,5,20,.7) !important;
+    border: 1px solid rgba(34,211,238,.2) !important;
+    color: #e2e8f0 !important;
+    border-radius: 10px !important;
+}}
+label, .stSelectbox label, .stSlider label {{
+    color: #94a3b8 !important;
+    font-size: .82rem !important;
+}}
+.stSlider > div > div > div > div {{
+    background: linear-gradient(90deg,#3b82f6,#8b5cf6) !important;
+}}
+p, li, span {{ color: #94a3b8; }}
+h1,h2,h3 {{ color: #f1f5f9 !important; }}
 </style>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# Hero
-# ─────────────────────────────────────────────
+# ── HERO ─────────────────────────────────────────────────────────────────────
 st.markdown("""
-<div class="hero-header">
-    <h1>🏥 Voice-Enabled <span>Medical AI</span> Document QA</h1>
-    <p>Upload your medical report · Ask in Hindi or English · Get AI-powered spoken answers</p>
+<div class="hero">
+    <div class="hero-glow"></div>
+    <div class="hero-eyebrow">AI · RAG · Voice · Multilingual</div>
+    <h1 class="hero-title">Voice-Enabled<br><span>Medical AI</span> Document QA</h1>
+    <p class="hero-subtitle">
+        Upload your medical report, ask questions in Hindi or English by voice or text,
+        and receive AI-powered answers that merge PDF data with clinical insights.
+    </p>
     <div class="hero-badges">
-        <span class="hero-badge">📄 PDF Extraction</span>
-        <span class="hero-badge">🤖 Claude AI Chatbot</span>
-        <span class="hero-badge">🎤 Voice I/O</span>
-        <span class="hero-badge">🌐 Hindi + English</span>
-        <span class="hero-badge">⚠️ Health Alerts</span>
-        <span class="hero-badge">🔍 FAISS RAG</span>
+        <span class="hbadge blue">📄 PDF Extraction</span>
+        <span class="hbadge teal">🤖 Claude AI</span>
+        <span class="hbadge purple">🎤 Voice I/O</span>
+        <span class="hbadge pink">🌐 Hindi + English</span>
+        <span class="hbadge amber">⚠️ Health Alerts</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# Feature cards
+# ── STAT CARDS ────────────────────────────────────────────────────────────────
 st.markdown("""
-<div class="feat-grid">
-    <div class="feat-card blue">
-        <span class="ficon">📄</span>
-        <div class="ftitle">Smart PDF Reading</div>
-        <div class="fdesc">PyMuPDF + pdfplumber dual extraction</div>
+<div class="stat-row">
+    <div class="stat-card sc-blue">
+        <div class="stat-icon">🔬</div>
+        <div class="stat-num">40+</div>
+        <div class="stat-lbl">Lab Tests Tracked</div>
     </div>
-    <div class="feat-card teal">
-        <span class="ficon">🎤</span>
-        <div class="ftitle">Voice Q&A</div>
-        <div class="fdesc">Speak in Hindi or English — answers spoken back</div>
+    <div class="stat-card sc-teal">
+        <div class="stat-icon">🧠</div>
+        <div class="stat-num">RAG</div>
+        <div class="stat-lbl">FAISS + MiniLM</div>
     </div>
-    <div class="feat-card purple">
-        <span class="ficon">🤖</span>
-        <div class="ftitle">AI Chatbot Merged</div>
-        <div class="fdesc">PDF facts + Claude AI insights in every answer</div>
+    <div class="stat-card sc-purple">
+        <div class="stat-icon">🌐</div>
+        <div class="stat-num">2</div>
+        <div class="stat-lbl">Languages</div>
     </div>
-    <div class="feat-card rose">
-        <span class="ficon">⚠️</span>
-        <div class="ftitle">Health Alerts</div>
-        <div class="fdesc">Auto-detects 40+ out-of-range lab values</div>
+    <div class="stat-card sc-pink">
+        <div class="stat-icon">⚡</div>
+        <div class="stat-num">2x</div>
+        <div class="stat-lbl">Answer Pipeline</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# Sidebar
-# ─────────────────────────────────────────────
+# ── SIDEBAR ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown('<div class="sidebar-card">', unsafe_allow_html=True)
-    st.header("⚙️ Settings")
+    # QR Code — hardcoded deploy link
+    st.markdown(f"""
+    <div class="qr-wrap">
+        <img src="data:image/png;base64,{qr_b64}" width="160"/>
+        <div class="qr-label">SCAN TO OPEN APP</div>
+        <div style="font-size:.65rem;color:#334155;margin-top:4px;">
+            voice-enabled-medical-ai<br>-document-app.streamlit.app
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    st.markdown('<div class="sec-title">Settings</div>', unsafe_allow_html=True)
     language_pref = st.selectbox("🌐 Language", ["Auto-Detect", "English", "Hindi"])
-    top_k         = st.slider("🔍 Top-K Chunks", 2, 10, 5)
+    top_k         = st.slider("🔍 Retrieve Chunks", 2, 10, 5)
     voice_speed   = st.selectbox("🔊 Voice Speed", ["Normal", "Slow"])
-    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="sidebar-card">', unsafe_allow_html=True)
-    st.header("🤖 Claude AI Key")
-    api_key_input = st.text_input(
-        "Anthropic API Key",
-        type="password",
-        placeholder="sk-ant-api03-...",
-        help="Paste your key here. It will be used for AI enrichment in every answer."
-    )
-    if api_key_input:
-        os.environ["ANTHROPIC_API_KEY"] = api_key_input.strip()
-        st.success("✅ API key active")
-    elif os.environ.get("ANTHROPIC_API_KEY"):
-        st.success("✅ Key loaded from env")
-    else:
-        st.warning("⚠️ No key — PDF extraction only")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="sidebar-card">', unsafe_allow_html=True)
-    st.header("📱 QR Code")
-    host_url = st.text_input("App URL", "http://localhost:8501")
-    if st.button("Generate QR"):
-        qr_path = generate_qr_code(host_url)
-        st.image(qr_path, caption="Scan to Open", width=160)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="sidebar-card">', unsafe_allow_html=True)
-    st.header("📊 Session")
-    st.write(f"💬 Messages: {len(st.session_state.chat_history.get_history())}")
+    st.markdown('<div class="sec-title">Session</div>', unsafe_allow_html=True)
+    st.markdown(f'<p style="font-size:.82rem;">💬 Messages: <b style="color:#22d3ee">{len(st.session_state.chat_history.get_history())}</b></p>', unsafe_allow_html=True)
     if st.session_state.doc_processed:
-        st.success(f"✅ {len(st.session_state.chunks)} chunks loaded")
-    if st.button("🗑️ Clear Chat"):
+        st.markdown(f'<p style="font-size:.82rem;">📦 Chunks: <b style="color:#22d3ee">{len(st.session_state.chunks)}</b></p>', unsafe_allow_html=True)
+    if st.button("🗑️ Clear Chat", use_container_width=True):
         st.session_state.chat_history.clear()
         st.session_state.audio_files = []
         st.session_state.last_query  = ""
+        st.session_state.last_alerts = []
         st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# Upload PDF
-# ─────────────────────────────────────────────
-st.markdown('<div class="section-heading">📄 Upload Medical Report</div>', unsafe_allow_html=True)
+# ── UPLOAD ────────────────────────────────────────────────────────────────────
+st.markdown('<div class="sec-title">Upload Medical Report</div>', unsafe_allow_html=True)
 st.markdown('<div class="upload-zone">', unsafe_allow_html=True)
-uploaded_file = st.file_uploader(
-    "Drop PDF here", type=["pdf"], label_visibility="collapsed"
-)
-st.markdown('<p>Any standard lab report PDF · Hindi & English supported</p></div>',
+uploaded_file = st.file_uploader("PDF", type=["pdf"], label_visibility="collapsed")
+st.markdown('<p>📋 Drop your lab report PDF here · Hindi & English supported · Processed locally</p></div>',
             unsafe_allow_html=True)
 
 if uploaded_file and not st.session_state.doc_processed:
-    with st.spinner("🔄 Processing PDF — extracting · chunking · embedding..."):
+    with st.spinner("🔄 Extracting · Chunking · Embedding..."):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(uploaded_file.read())
             tmp_path = tmp.name
@@ -276,96 +409,81 @@ if uploaded_file and not st.session_state.doc_processed:
         chunks      = chunk_text(clean_text)
         embeddings  = generate_embeddings(chunks)
         faiss_index = build_faiss_index(embeddings)
-        st.session_state.chunks       = chunks
-        st.session_state.faiss_index  = faiss_index
+        st.session_state.chunks        = chunks
+        st.session_state.faiss_index   = faiss_index
         st.session_state.doc_processed = True
         os.unlink(tmp_path)
-    st.markdown('<div class="success-box">✅ Document processed! Ask your questions below.</div>',
+    st.markdown('<div class="success-box">✅ Document processed — ask your questions below!</div>',
                 unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# Main Chat Interface
-# ─────────────────────────────────────────────
+# ── CHAT ──────────────────────────────────────────────────────────────────────
 if st.session_state.doc_processed:
 
-    history = st.session_state.chat_history.get_history()
+    history     = st.session_state.chat_history.get_history()
     audio_files = st.session_state.audio_files
 
-    # ── Conversation (shown ABOVE the input box) ──
+    # Conversation shown ABOVE input
     if history:
-        st.markdown('<div class="section-heading">🗨️ Conversation</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title">Conversation</div>', unsafe_allow_html=True)
         st.markdown('<div class="chat-area">', unsafe_allow_html=True)
 
+        import re as _re
         for i, turn in enumerate(history):
             # User bubble
             st.markdown(f"""
             <div class="bubble-user">
                 <div class="bubble-user-inner">
-                    <div class="bubble-user-label">👤 YOU</div>
+                    <div class="bubble-user-label">YOU</div>
                     {turn['user']}
                 </div>
             </div>""", unsafe_allow_html=True)
 
             # Bot bubble
-            answer_html = (
-                turn['bot']
-                .replace('\n', '<br>')
-                .replace('**', '<b>', 1)
-            )
-            # Simple bold: replace remaining ** pairs
-            import re as _re
             answer_html = _re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', turn['bot'].replace('\n','<br>'))
-
             st.markdown(f"""
             <div class="bubble-bot">
                 <div class="bubble-bot-inner">
                     <div class="bubble-bot-label">🏥 MEDICAL AI ASSISTANT</div>
-                    <span class="source-pdf">📄 PDF Extracted</span>
-                    <span class="source-ai">🤖 AI Enriched</span><br><br>
+                    <span class="src-pdf">📄 PDF Extracted</span>
+                    <span class="src-ai">🤖 AI Enriched</span><br><br>
                     {answer_html}
                 </div>
             </div>""", unsafe_allow_html=True)
 
-            # 🔊 Individual audio player per turn
+            # Individual audio player per turn
             if i < len(audio_files) and audio_files[i] and os.path.exists(audio_files[i]):
-                st.markdown('<div class="audio-row">', unsafe_allow_html=True)
                 st.audio(audio_files[i], format="audio/mp3")
-                st.markdown('</div>', unsafe_allow_html=True)
 
-        st.markdown('</div>', unsafe_allow_html=True)  # close chat-area
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Alerts (shown after chat) ──
-    # (Alerts stored in session from last query)
-    if "last_alerts" in st.session_state and st.session_state.last_alerts:
-        st.markdown('<div class="section-heading">⚠️ Medical Alerts</div>', unsafe_allow_html=True)
+    # Alerts
+    if st.session_state.last_alerts:
+        st.markdown('<div class="sec-title">Medical Alerts</div>', unsafe_allow_html=True)
         for alert in st.session_state.last_alerts:
             st.markdown(f'<div class="alert-box">{alert}</div>', unsafe_allow_html=True)
 
-    # ── Input at the BOTTOM ──
-    st.markdown('<div class="section-heading">💬 Ask Your Question</div>', unsafe_allow_html=True)
-    st.markdown('<div class="input-section">', unsafe_allow_html=True)
-
+    # Input dock — BOTTOM
+    st.markdown('<div class="sec-title">Ask Your Question</div>', unsafe_allow_html=True)
+    st.markdown('<div class="input-dock">', unsafe_allow_html=True)
     col1, col2, col3 = st.columns([5, 1, 1])
     with col1:
         user_text = st.text_input(
-            "q",
-            label_visibility="collapsed",
+            "q", label_visibility="collapsed",
             placeholder="Ask in Hindi or English:  'What is my WBC count?'  /  'मेरा हीमोग्लोबिन कैसा है?'",
             key="user_input"
         )
     with col2:
-        voice_btn = st.button("🎤 Voice", use_container_width=True)
+        voice_btn = st.button("🎤", use_container_width=True)
     with col3:
-        send_btn  = st.button("📤 Send", use_container_width=True)
-
+        send_btn  = st.button("Send ➤", use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Determine query
+    # Resolve query
     query = None
     if voice_btn:
         from voice_handler import SR_AVAILABLE, PYAUDIO_AVAILABLE
         if not SR_AVAILABLE or not PYAUDIO_AVAILABLE:
-            st.warning("🎤 Voice input is not available on Streamlit Cloud (no microphone access). Please type your question.")
+            st.warning("🎤 Voice input not available on Streamlit Cloud. Please type your question.")
         else:
             with st.spinner("🎤 Listening..."):
                 spoken = speech_to_text()
@@ -373,75 +491,62 @@ if st.session_state.doc_processed:
                     query = spoken
                     st.info(f"🎤 You said: **{spoken}**")
                 else:
-                    st.warning("Could not detect speech. Please try again or type your question.")
+                    st.warning("No speech detected. Please try again.")
 
     if send_btn and user_text.strip():
         query = user_text.strip()
     elif user_text.strip() and user_text.strip() != st.session_state.last_query:
-        # Auto-submit on Enter (text changed since last submit)
         query = user_text.strip()
 
-    # ── Process query ──
+    # Process
     if query and query != st.session_state.last_query:
         st.session_state.last_query = query
-
         with st.spinner("🧠 Extracting from PDF + consulting Claude AI..."):
-            # Language
-            lang = detect_language(query)
+            lang     = detect_language(query)
             if language_pref != "Auto-Detect":
                 lang = "hi" if language_pref == "Hindi" else "en"
 
-            # Translate to English for retrieval
-            query_en = translate_to_english(query, lang)
-
-            # Retrieve chunks
+            query_en   = translate_to_english(query, lang)
             q_emb      = embed_query(query_en)
             top_chunks = search_faiss(
                 st.session_state.faiss_index,
                 st.session_state.chunks,
-                q_emb,
-                top_k=top_k,
-                query_text=query_en
+                q_emb, top_k=top_k, query_text=query_en
             )
-
-            # Medical alerts
-            context = " ".join(top_chunks)
-            alerts  = check_medical_values(context)
+            alerts  = check_medical_values(" ".join(top_chunks))
             st.session_state.last_alerts = alerts
 
-            # Two-stage answer (PDF extract + Claude AI merge)
-            history_text  = st.session_state.chat_history.get_context()
-            answer_en     = generate_answer(query_en, top_chunks, history_text)
-
-            # Translate back if Hindi
+            answer_en = generate_answer(
+                query_en, top_chunks,
+                st.session_state.chat_history.get_context()
+            )
             if lang == "hi":
                 from language_detector import translate_to_hindi
                 answer_display = translate_to_hindi(answer_en)
             else:
                 answer_display = answer_en
 
-            # Save to history
             st.session_state.chat_history.add(query, answer_display)
-
-            # TTS — generate audio for THIS turn
-            tts_path = text_to_speech(answer_display, lang=lang, slow=(voice_speed == "Slow"))
+            tts_path = text_to_speech(answer_display, lang=lang, slow=(voice_speed=="Slow"))
             st.session_state.audio_files.append(tts_path)
 
-        # Rerun so the new turn appears in the chat above the input box
         st.rerun()
 
 else:
     # Not yet uploaded
     st.markdown("""
     <div style="
-        background:linear-gradient(135deg,#0d2b4e,#0f172a);
-        border:1px solid #1e3a5f; border-radius:16px;
-        padding:36px; text-align:center; margin-top:20px;
+        text-align:center; padding:60px 20px;
+        background:rgba(0,0,0,0.3);
+        border:1px dashed rgba(34,211,238,0.2);
+        border-radius:20px; margin-top:20px;
     ">
-        <p style="font-size:2.5rem;margin-bottom:10px;">📤</p>
-        <p style="color:#7dd3fc;font-size:1.1rem;font-weight:600;">Upload a medical PDF to start</p>
-        <p style="color:#475569;font-size:0.88rem;margin-top:6px;">
+        <div style="font-size:3.5rem;margin-bottom:16px;">📤</div>
+        <div style="font-family:'Orbitron',monospace;font-size:1.1rem;color:#22d3ee;font-weight:700;margin-bottom:8px;">
+            Upload a Medical PDF to Begin
+        </div>
+        <div style="font-size:.88rem;color:#334155;">
             Your report is processed locally · AI answers = PDF facts + Claude insights
-        </p>
+        </div>
     </div>
     """, unsafe_allow_html=True)
