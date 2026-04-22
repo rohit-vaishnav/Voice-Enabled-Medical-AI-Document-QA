@@ -15,7 +15,7 @@ from chat_history import ChatHistory
 from qr_generator import generate_qr_code
 
 # ── Config ──────────────────────────────────────────────────────────────────
-DEPLOY_URL = "https://voice-enabled-medical-ai-document-app.streamlit.app/"
+DEPLOY_URL = "https://voice-enabled-medical-ai-document-app-drwpwspgwlxapznqo3jumw.streamlit.app/"
 # API keys are managed via sidebar — saved in session_state, restored on every rerun
 
 # ─────────────────────────────────────────────
