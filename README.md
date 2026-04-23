@@ -166,4 +166,5 @@ Auto-detected out-of-range values for:
 - AI enrichment requires an Anthropic API key — works without it (PDF extraction only)
 - Internet required for Google STT, gTTS, translation, and Claude API
 - This is a research/educational system — not a substitute for medical advice
-```Thank You```
+
+thank you
