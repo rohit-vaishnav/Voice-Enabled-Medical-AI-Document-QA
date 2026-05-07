@@ -36,7 +36,7 @@ for k, v in {
     "last_query":    "",
     "last_alerts":   [],
     "debug_mode":    False,
-    "groq_key":      "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",
+    "groq_key":      "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",
     "anthropic_key": "",
     "clean_text":    "",
 }.items():
